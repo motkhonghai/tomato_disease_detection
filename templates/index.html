@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>hệ thống nhận diện bệnh trên lá Cây Cà Chua</title>
+    <!-- Main stylesheet: contains layout, theme variables, components, responsive rules -->
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Icon set (Font Awesome) used across the UI -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+        <!-- Notification container (single place for toasts).
+            JS pushes notifications into #notificationContainer -->
+        <div class="notification-container" id="notificationContainer"></div>
+
+    <div class="container">
+        <!-- Header: app title + small system status badge (updated via WebSocket) -->
+        <header class="header">
+            <h1><i class="fas fa-leaf" aria-hidden="true"></i> hệ thống nhận diện bệnh trên lá CÂY CÀ CHUA</h1>
+            <!-- #systemStatus is updated by JS with current system state (temperature/humidity, model status) -->
+            <div class="system-status" id="systemStatus">
+                <i class="fas fa-circle status-icon" aria-hidden="true"></i>
+                <span>Đang khởi động...</span>
+            </div>
+        </header>
+
+        <!-- Main Content: two-column layout (left = video + controls, right = dashboard) -->
+        <div class="main-content">
+            <!-- Left Column: stream, capture controls, upload -->
+            <div class="left-column">
+                <!-- Video Stream (no live inference) -->
+                <!-- The <img id="videoFeed"> uses MJPEG endpoint or DataURL from server -->
+                <div class="video-container">
+                    <h2><i class="fas fa-video"></i> Video Stream (Không nhận diện)</h2>
+                    <div class="video-wrapper">
+                        <img src="{{ url_for('video_feed') }}" id="videoFeed" alt="Camera Feed">
+                        <div class="video-overlay">
+                            <!-- detection-info shows contextual text over the stream
+                                 JS updates #detectionText dynamically when captures/analysis occur -->
+                            <div class="detection-info">
+                                <h3 id="detectionText">WEBCAM STREAM</h3>
+                                <p class="stream-info">Chỉ hiển thị video thô</p>
+                                <p class="stream-info">Nhận diện: Chụp ảnh định kỳ</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Video control buttons: trigger actions on server via AJAX/WebSocket -->
+                    <div class="video-controls">
+                        <button class="btn btn-primary" onclick="captureImage()">
+                            <i class="fas fa-camera"></i> Chụp Ảnh Thủ Công
+                        </button>
+                        <button class="btn btn-secondary" onclick="triggerDailyCapture()">
+                            <i class="fas fa-calendar-day"></i> Chụp Định Kỳ Ngay
+                        </button>
+                        <button class="btn btn-outline" onclick="toggleFullscreen()">
+                            <i class="fas fa-expand"></i> Toàn Màn Hình
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Daily Capture Information: shows schedule and allows immediate control -->
+                <div class="dashboard-card daily-capture-card">
+                    <h2><i class="fas fa-calendar-check"></i> Chụp Ảnh Định Kỳ Hàng Ngày</h2>
+                    
+                    <div class="daily-capture-info">
+                        <div class="info-row">
+                            <span class="info-label">Trạng thái:</span>
+                            <span class="info-value" id="dailyCaptureStatus">
+                                <i class="fas fa-spinner fa-spin"></i> Đang kiểm tra...
+                            </span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Lần chụp tiếp theo:</span>
+                            <span class="info-value" id="nextCaptureTime">--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Lần chụp cuối:</span>
+                            <span class="info-value" id="lastCaptureTime">--</span>
+                        </div>
+                    </div>
+                    
+                    <div class="daily-capture-controls">
+                        <button class="btn btn-small btn-success" onclick="toggleDailyCapture(true)">
+                            <i class="fas fa-play"></i> Bật Định Kỳ
+                        </button>
+                        <button class="btn btn-small btn-warning" onclick="toggleDailyCapture(false)">
+                            <i class="fas fa-pause"></i> Tắt Định Kỳ
+                        </button>
+                        <button class="btn btn-small btn-info" onclick="getDailyCaptureInfo()">
+                            <i class="fas fa-sync"></i> Làm Mới
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Upload Image: drag & drop or file select. JS handles preview & POST to /upload -->
+                <div class="upload-section">
+                    <h2><i class="fas fa-cloud-upload-alt"></i> Upload Ảnh Phân Tích</h2>
+                    <div class="upload-area" id="uploadArea">
+                        <i class="fas fa-file-upload upload-icon"></i>
+                        <p>Kéo thả ảnh vào đây hoặc click để chọn</p>
+                        <small>(Hỗ trợ JPG, PNG - tối đa 10MB)</small>
+                        <input type="file" id="fileInput" accept="image/*" onchange="uploadImage()">
+                    </div>
+                    <div class="upload-preview" id="uploadPreview"></div>
+                </div>
+            </div>
+
+            <!-- Right Column - Dashboard: settings, sensors, results, captures -->
+            <div class="right-column">
+                <!-- Threshold Control: slider sends `update_threshold` to server -->
+                <div class="dashboard-card">
+                    <h2><i class="fas fa-sliders-h"></i> Cài Đặt Ngưỡng Tin Cậy</h2>
+                    <div class="threshold-control">
+                        <div class="threshold-header">
+                            <h4>Ngưỡng thông báo bệnh:</h4>
+                            <span class="threshold-value" id="thresholdValue">60%</span>
+                        </div>
+                        <input type="range" 
+                               min="0" 
+                               max="100" 
+                               value="60" 
+                               class="threshold-slider" 
+                               id="thresholdSlider"
+                               oninput="updateThreshold(this.value)">
+                        <div class="threshold-labels">
+                            <span>0%</span>
+                            <span>50%</span>
+                            <span>100%</span>
+                        </div>
+                        <p class="threshold-note">
+                            <i class="fas fa-info-circle"></i> 
+                            Chỉ nhận thông báo khi độ tin cậy vượt ngưỡng này
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Sensor Data: temperature & humidity read from DHT11 and updated via socket -->
+                <div class="dashboard-card">
+                    <h2><i class="fas fa-thermometer-half"></i> Thông Số Môi Trường</h2>
+                    <div class="sensor-data">
+                        <div class="sensor-item">
+                            <i class="fas fa-temperature-high sensor-icon temp"></i>
+                            <div class="sensor-info">
+                                <h3>Nhiệt Độ</h3>
+                                <p class="sensor-value" id="temperatureValue">-- °C</p>
+                            </div>
+                        </div>
+                        <div class="sensor-item">
+                            <i class="fas fa-tint sensor-icon humidity"></i>
+                            <div class="sensor-info">
+                                <h3>Độ Ẩm</h3>
+                                <p class="sensor-value" id="humidityValue">-- %</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sensor-update">
+                        <small>Cập nhật: <span id="sensorTimestamp">--</span></small>
+                        <button class="btn btn-small" onclick="updateSensorData()">
+                            <i class="fas fa-sync-alt"></i> Làm mới
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Disease Status: high-level detection state and latest details -->
+                <div class="dashboard-card">
+                    <h2><i class="fas fa-clipboard-check"></i> Trạng Thái Phát Hiện</h2>
+                    <div class="disease-status" id="diseaseStatus">
+                        <div class="status-indicator healthy">
+                            <i class="fas fa-check-circle"></i>
+                            <span>ĐANG THEO DÕI</span>
+                        </div>
+                    </div>
+                    <div class="disease-details" id="diseaseDetails">
+                        <div class="detail-row">
+                            <span class="detail-label">Kết quả gần nhất:</span>
+                            <span class="detail-value" id="latestResult">Chưa có dữ liệu</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Độ tin cậy:</span>
+                            <span class="detail-value" id="latestConfidence">--</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Thời gian:</span>
+                            <span class="detail-value" id="latestTimestamp">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Daily Captures grid: recent daily captures loaded via API -->
+                <div class="dashboard-card">
+                    <h2><i class="fas fa-history"></i> Ảnh Chụp Định Kỳ Gần Đây</h2>
+                    <div class="captures-grid" id="dailyCapturesGrid">
+                        <p class="loading-text">Đang tải...</p>
+                    </div>
+                </div>
+
+                <!-- Manual Captures grid: recent manual captures -->
+                <div class="dashboard-card">
+                    <h2><i class="fas fa-camera-retro"></i> Ảnh Chụp Thủ Công</h2>
+                    <div class="captures-grid" id="manualCapturesGrid">
+                        <p class="loading-text">Đang tải...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer: simple status line. #currentTime and #connectionStatus are updated by JS -->
+        <footer class="footer">
+            <p>
+                <i class="fas fa-leaf"></i> hệ thống nhận diện bệnh trên lá CÂY CÀ CHUA | 
+                <span id="currentTime"></span> | 
+                <span id="connectionStatus"><i class="fas fa-wifi"></i> Đang kết nối...</span>
+            </p>
+        </footer>
+    </div>
+
+    <!-- Scripts: socket.io and app logic -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <script src="/static/js/script.js"></script>
+</body>
+</html>
